@@ -239,7 +239,7 @@ describe("MemoryCache", () => {
 
       const stats = cache.getStats();
       expect(stats.memoryBytes).toBeGreaterThan(0);
-      expect(stats.maxMemoryBytes).toBe(100 * 1024 * 1024); // 默认 100MB
+      expect(stats.maxMemoryBytes).toBe(64 * 1024 * 1024); // 默认 64MB（适配容器 768m）
       expect(stats.memoryUsagePercent).toBeLessThan(100);
     });
   });

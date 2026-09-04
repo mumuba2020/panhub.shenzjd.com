@@ -1,291 +1,185 @@
 type CacheRecord<T> = { value: T; expireAt: number; size: number };
 
 export interface MemoryCacheOptions {
-  maxSize?: number; // 最大缓存条目数
-  maxMemoryBytes?: number; // 最大内存占用（字节）
-  cleanupInterval?: number; // 清理间隔（毫秒）
-  memoryThreshold?: number; // 内存阈值百分比（0-1），达到时触发清理
+  maxSize?: number;
+  maxMemoryBytes?: number;
+  cleanupInterval?: number;
+  memoryThreshold?: number;
 }
 
 export interface MemoryCacheStats {
-  total: number; // 总条目数
-  active: number; // 有效条目数
-  expired: number; // 过期条目数
-  maxSize: number; // 最大条目数
-  memoryBytes: number; // 当前内存占用
-  maxMemoryBytes: number; // 最大内存限制
-  memoryUsagePercent: number; // 内存使用百分比
-  hits: number; // 命中次数
-  misses: number; // 未命中次数
-  evictions: number; // 淘汰次数
+  total: number;
+  active: number;
+  expired: number;
+  maxSize: number;
+  memoryBytes: number;
+  maxMemoryBytes: number;
+  memoryUsagePercent: number;
+  hits: number;
+  misses: number;
+  evictions: number;
 }
 
+/**
+ * 高性能 LRU 内存缓存
+ *
+ * - Map 插入序即 LRU 序：访问时 delete+re-insert 移到末尾，淘汰从头部取 O(1)
+ * - 增量追踪内存：set/remove 时增减 totalMemoryBytes，不再遍历
+ * - 快速 size 估算：不用 JSON.stringify
+ * - 仅 set() 触发周期清理，get() 只清理被访问的那个过期 key
+ */
 export class MemoryCache<T = unknown> {
   private store = new Map<string, CacheRecord<T>>();
-  private accessOrder = new Map<string, number>(); // key -> 最后访问时间戳
-  private options: Required<MemoryCacheOptions>;
+  private totalMemoryBytes = 0;
   private lastCleanup = 0;
-  private metrics = {
-    hits: 0,
-    misses: 0,
-    evictions: 0,
-  };
-  private sequence = 0; // 单调递增序列，用于 LRU 排序
+  private metrics = { hits: 0, misses: 0, evictions: 0 };
+  private options: Required<MemoryCacheOptions>;
 
   constructor(options: MemoryCacheOptions = {}) {
     this.options = {
-      maxSize: options.maxSize ?? 1000,
-      maxMemoryBytes: options.maxMemoryBytes ?? 100 * 1024 * 1024, // 默认 100MB
+      maxSize: options.maxSize ?? 300,
+      maxMemoryBytes: options.maxMemoryBytes ?? 64 * 1024 * 1024,
       cleanupInterval: options.cleanupInterval ?? 5 * 60 * 1000,
-      memoryThreshold: options.memoryThreshold ?? 0.8, // 80% 触发清理
+      memoryThreshold: options.memoryThreshold ?? 0.8,
     };
   }
 
   /**
-   * 估算对象大小（字节）
+   * 递归估算值占用的近似内存（字节）。
+   * 修正（2026-08-20 恢复 84c5f3a）：旧实现嵌套数组按 length*64 估算，对
+   * SearchResult[] 这类对象数组严重低估（每条含 links/title/content 等字段，
+   * 真实占用是估算的几十倍），导致 maxMemoryBytes 形同虚设、缓存实际吃掉
+   * 数 GB 内存（2GB 无 swap 小机 OOM 的根因之一）。
+   * 新实现递归到字段级，估算接近真实占用；搜索同一关键词重复率低，缓存
+   * 收益有限，按真实大小收紧上限（300 条 / 64MB，适配容器 768m 限制）。
    */
-  private estimateSize(value: T): number {
-    try {
-      if (value === null || value === undefined) return 8;
-      if (typeof value === 'string') return value.length * 2;
-      if (typeof value === 'number') return 8;
-      if (typeof value === 'boolean') return 4;
-      if (typeof value === 'object') {
-        // 简化的对象大小估算
-        const str = JSON.stringify(value);
-        return str ? str.length * 2 : 64;
+  private fastEstimate(value: unknown): number {
+    return this.estimateAny(value, 0);
+  }
+
+  private estimateAny(value: unknown, depth: number): number {
+    if (value === null || value === undefined) return 8;
+    if (typeof value === "string") return value.length * 2 + 8;
+    if (typeof value === "number") return 8;
+    if (typeof value === "boolean") return 4;
+    if (typeof value === "object") {
+      // 防过深/循环引用：超过 4 层按定值计（SearchResult 结构最深约 3 层）
+      if (depth > 4) return 128;
+      if (Array.isArray(value)) {
+        if (value.length === 0) return 16;
+        return value.length * this.estimateAny(value[0], depth + 1) + 16;
       }
-      return 64;
-    } catch {
-      return 64;
+      let total = 16;
+      for (const key in value as Record<string, unknown>) {
+        total +=
+          key.length * 2 + 16 + this.estimateAny((value as any)[key], depth + 1);
+      }
+      return total;
     }
+    return 64;
   }
 
-  /**
-   * 计算当前总内存占用
-   */
-  private calculateMemoryUsage(): number {
-    let total = 0;
-    for (const [, record] of this.store) {
-      total += record.size;
-    }
-    return total;
+  private removeEntry(key: string, rec: CacheRecord<T>): void {
+    this.store.delete(key);
+    this.totalMemoryBytes -= rec.size;
   }
 
-  /**
-   * 淘汰最旧的条目（LRU）
-   */
-  private evictOldest(count: number = 1): void {
-    const entries = Array.from(this.accessOrder.entries())
-      .sort((a, b) => {
-        // 先按时间戳排序，时间戳相同时按 key 排序保证稳定性
-        if (a[1] !== b[1]) {
-          return a[1] - b[1];
-        }
-        return a[0].localeCompare(b[0]);
-      }); // 按时间戳排序，最旧在前
-
-    const toEvict = entries.slice(0, count);
-    for (const [key] of toEvict) {
-      this.store.delete(key);
-      this.accessOrder.delete(key);
+  /** O(1) LRU 淘汰：Map 第一个 entry 即最旧 */
+  private evictOne(): void {
+    const firstKey = this.store.keys().next().value;
+    if (firstKey !== undefined) {
+      const rec = this.store.get(firstKey)!;
+      this.removeEntry(firstKey, rec);
       this.metrics.evictions++;
     }
-
-    // 静默处理缓存淘汰
   }
 
-  /**
-   * 智能清理：优先清理过期条目，如果还不够则清理最旧的
-   */
-  private smartCleanup(force: boolean = false): void {
+  private cleanup(): void {
     const now = Date.now();
-
-    // 检查是否需要清理（时间间隔）
-    if (!force && now - this.lastCleanup < this.options.cleanupInterval) {
-      return;
-    }
-
-    this.lastCleanup = now;
-    const memoryUsage = this.calculateMemoryUsage();
-    const memoryPercent = memoryUsage / this.options.maxMemoryBytes;
-
-    // 检查是否需要基于内存阈值清理
-    const needMemoryCleanup = memoryPercent > this.options.memoryThreshold;
-    const needSizeCleanup = this.store.size > this.options.maxSize;
-
-    if (!needMemoryCleanup && !needSizeCleanup && !force) {
-      return;
-    }
-
-    // 1. 先清理过期条目
-    const expiredKeys: string[] = [];
     for (const [key, rec] of this.store) {
       if (rec.expireAt <= now) {
-        expiredKeys.push(key);
+        this.removeEntry(key, rec);
       }
     }
+  }
 
-    for (const key of expiredKeys) {
-      this.store.delete(key);
-      this.accessOrder.delete(key);
-    }
-
-    let cleaned = expiredKeys.length;
-    let freedMemory = expiredKeys.reduce((sum, key) => {
-      const rec = this.store.get(key);
-      return sum + (rec?.size || 0);
-    }, 0);
-
-    // 2. 如果仍然超过限制，按 LRU 淘汰
-    const sizeOver = this.store.size - this.options.maxSize;
-    const memoryOver = memoryUsage - this.options.maxMemoryBytes;
-
-    if (sizeOver > 0) {
-      this.evictOldest(sizeOver);
-      cleaned += sizeOver;
-    } else if (memoryOver > 0) {
-      // 基于内存淘汰：需要释放多少字节
-      let bytesToFree = memoryOver;
-      let freed = 0;
-      const entries = Array.from(this.accessOrder.entries())
-        .sort((a, b) => a[1] - b[1]);
-
-      for (const [key] of entries) {
-        if (bytesToFree <= 0) break;
-        const rec = this.store.get(key);
-        if (rec) {
-          bytesToFree -= rec.size;
-          this.store.delete(key);
-          this.accessOrder.delete(key);
-          this.metrics.evictions++;
-          freed++;
-        }
-      }
-      cleaned += freed;
-    }
-
-    // 静默处理清理
+  /** 仅 set() 调用：按 cleanupInterval 周期清理 */
+  private maybeCleanup(): void {
+    const now = Date.now();
+    if (now - this.lastCleanup < this.options.cleanupInterval) return;
+    this.lastCleanup = now;
+    this.cleanup();
   }
 
   get(key: string): { hit: boolean; value?: T } {
-    this.smartCleanup();
-
     const rec = this.store.get(key);
     if (!rec) {
       this.metrics.misses++;
       return { hit: false };
     }
 
-    if (rec.expireAt > Date.now()) {
-      // 更新访问顺序（LRU）- 使用单调递增序列保证顺序
-      this.sequence++;
-      this.accessOrder.set(key, this.sequence);
-      this.metrics.hits++;
-      return { hit: true, value: rec.value };
+    if (rec.expireAt <= Date.now()) {
+      this.removeEntry(key, rec);
+      this.metrics.misses++;
+      return { hit: false };
     }
 
-    // 已过期，删除
+    // LRU refresh: delete + re-insert 移到末尾 O(1)
     this.store.delete(key);
-    this.accessOrder.delete(key);
-    this.metrics.misses++;
-    return { hit: false };
+    this.store.set(key, rec);
+    this.metrics.hits++;
+    return { hit: true, value: rec.value };
   }
 
   set(key: string, value: T, ttlMs: number): void {
-    this.smartCleanup();
+    this.maybeCleanup();
 
-    // 如果 key 已存在，先删除（更新内存占用）
-    if (this.store.has(key)) {
-      const oldRec = this.store.get(key);
-      if (oldRec) {
-        // 内存占用变化
-        this.store.delete(key);
-        this.accessOrder.delete(key);
-      }
+    const existing = this.store.get(key);
+    if (existing) {
+      this.removeEntry(key, existing);
     }
 
-    const size = this.estimateSize(value);
+    const size = this.fastEstimate(value);
     const record: CacheRecord<T> = {
       value,
       expireAt: Date.now() + Math.max(0, ttlMs),
       size,
     };
 
-    // 检查容量和内存限制
-    const currentMemory = this.calculateMemoryUsage();
-    const needSizeEviction = this.store.size >= this.options.maxSize;
-    const needMemoryEviction = (currentMemory + size) > this.options.maxMemoryBytes;
-
-    if (needSizeEviction || needMemoryEviction) {
-      // 智能淘汰：优先淘汰过期的
-      const expiredKeys: string[] = [];
-      for (const [k, rec] of this.store) {
-        if (rec.expireAt <= Date.now()) {
-          expiredKeys.push(k);
-        }
-      }
-
-      // 删除所有过期条目
-      for (const k of expiredKeys) {
-        this.store.delete(k);
-        this.accessOrder.delete(k);
-        this.metrics.evictions++;
-      }
-
-      // 检查删除过期后是否还需要淘汰
-      const stillNeedSizeEviction = this.store.size >= this.options.maxSize;
-      const currentMemoryAfter = this.calculateMemoryUsage();
-      const stillNeedMemoryEviction = (currentMemoryAfter + size) > this.options.maxMemoryBytes;
-
-      if (stillNeedSizeEviction || stillNeedMemoryEviction) {
-        // 按 LRU 淘汰
-        if (stillNeedSizeEviction) {
-          // 需要淘汰多少个条目
-          const toEvict = this.store.size - this.options.maxSize + 1; // +1 为新条目腾空间
-          this.evictOldest(toEvict);
-        } else if (stillNeedMemoryEviction) {
-          // 需要释放多少内存
-          let bytesToFree = (currentMemoryAfter + size) - this.options.maxMemoryBytes;
-          let freed = 0;
-          const entries = Array.from(this.accessOrder.entries())
-            .sort((a, b) => {
-              if (a[1] !== b[1]) {
-                return a[1] - b[1];
-              }
-              return a[0].localeCompare(b[0]);
-            });
-
-          for (const [k] of entries) {
-            if (bytesToFree <= 0) break;
-            const rec = this.store.get(k);
-            if (rec) {
-              bytesToFree -= rec.size;
-              this.store.delete(k);
-              this.accessOrder.delete(k);
-              this.metrics.evictions++;
-              freed++;
-            }
-          }
-        }
-      }
+    // 淘汰直到有空间
+    while (
+      (this.store.size >= this.options.maxSize ||
+        this.totalMemoryBytes + size > this.options.maxMemoryBytes) &&
+      this.store.size > 0
+    ) {
+      this.evictOne();
     }
 
     this.store.set(key, record);
-    this.sequence++;
-    this.accessOrder.set(key, this.sequence);
+    this.totalMemoryBytes += size;
   }
 
   delete(key: string): void {
-    this.store.delete(key);
-    this.accessOrder.delete(key);
+    const rec = this.store.get(key);
+    if (rec) this.removeEntry(key, rec);
+  }
+
+  /** 按前缀批量删除（管理端写操作失效对应面板缓存用），返回删除条数 */
+  deletePrefix(prefix: string): number {
+    let removed = 0;
+    for (const [key, rec] of this.store) {
+      if (key.startsWith(prefix)) {
+        this.removeEntry(key, rec);
+        removed++;
+      }
+    }
+    return removed;
   }
 
   clear(): void {
     this.store.clear();
-    this.accessOrder.clear();
+    this.totalMemoryBytes = 0;
     this.metrics = { hits: 0, misses: 0, evictions: 0 };
-    this.sequence = 0;
   }
 
   get size(): number {
@@ -293,43 +187,36 @@ export class MemoryCache<T = unknown> {
   }
 
   get memoryUsage(): number {
-    return this.calculateMemoryUsage();
+    return this.totalMemoryBytes;
   }
 
   getStats(): MemoryCacheStats {
     const now = Date.now();
     let active = 0;
     let expired = 0;
-
     for (const [, rec] of this.store) {
-      if (rec.expireAt > now) {
-        active++;
-      } else {
-        expired++;
-      }
+      if (rec.expireAt > now) active++;
+      else expired++;
     }
-
-    const memoryBytes = this.calculateMemoryUsage();
-    const memoryUsagePercent = (memoryBytes / this.options.maxMemoryBytes) * 100;
-
     return {
       total: this.store.size,
       active,
       expired,
       maxSize: this.options.maxSize,
-      memoryBytes,
+      memoryBytes: this.totalMemoryBytes,
       maxMemoryBytes: this.options.maxMemoryBytes,
-      memoryUsagePercent: Math.round(memoryUsagePercent * 100) / 100,
+      memoryUsagePercent:
+        Math.round(
+          (this.totalMemoryBytes / this.options.maxMemoryBytes) * 10000
+        ) / 100,
       hits: this.metrics.hits,
       misses: this.metrics.misses,
       evictions: this.metrics.evictions,
     };
   }
 
-  /**
-   * 手动触发清理（用于测试或紧急情况）
-   */
   forceCleanup(): void {
-    this.smartCleanup(true);
+    this.lastCleanup = 0;
+    this.maybeCleanup();
   }
 }

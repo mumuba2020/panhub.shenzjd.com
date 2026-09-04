@@ -1,0 +1,23 @@
+name = "panhub-router"
+main = "worker.js"
+compatibility_date = "2025-07-15"
+
+# 路由：接管 panhub.shenzjd.com 全部流量（已启用，2026-08-17 用户确认）
+# 注意：routes 必须放在顶层（放 [triggers] 段内会被 wrangler 忽略并告警）
+routes = [
+  { pattern = "panhub.shenzjd.com/*", zone_name = "shenzjd.com" }
+]
+
+# Docker 健康状态缓存（Cron 探测写入）
+[[kv_namespaces]]
+binding = "ROUTER_STATE"
+id = "70dd36d3bc32412ea5fce82df9f48cab"
+
+# 备用 Worker（fallback 目标）：Service Binding 直调，避免同 zone Worker fetch 的 1042 错误
+[[services]]
+binding = "FALLBACK"
+service = "panhub-shenzjd-com"
+
+# 每 1 分钟探测 Docker 健康
+[triggers]
+crons = ["*/1 * * * *"]

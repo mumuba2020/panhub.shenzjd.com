@@ -1,14 +1,7 @@
 import type { Ref } from "vue";
-import {
-  ALL_PLUGIN_NAMES,
-  DEFAULT_USER_SETTINGS,
-  STORAGE_KEYS,
-} from "~/config/plugins";
-import channelsConfig from "~/config/channels.json";
+import { DEFAULT_USER_SETTINGS } from "~/config/plugins";
 
 export interface UserSettings {
-  enabledTgChannels: string[];
-  enabledPlugins: string[];
   concurrency: number;
   pluginTimeoutMs: number;
 }
@@ -16,150 +9,35 @@ export interface UserSettings {
 export interface UseSettingsReturn {
   settings: Ref<UserSettings>;
   loadSettings: () => void;
-  saveSettings: () => void;
-  resetToDefault: () => void;
-  onSelectAll: () => void;
-  onClearAll: () => void;
-  onSelectAllTg: () => void;
-  onClearAllTg: () => void;
 }
 
-export function useSettings(): UseSettingsReturn {
-  const config = useRuntimeConfig();
-
-  // 获取默认频道（优先使用配置文件，fallback 到运行时配置）
-  const defaultTgChannels = computed(() => {
-    const configChannels = (config.public as any)?.tgDefaultChannels;
-    if (Array.isArray(configChannels) && configChannels.length > 0) {
-      return configChannels;
-    }
-    return channelsConfig.defaultChannels;
-  });
-
-  // 状态
-  const settings = ref<UserSettings>({
-    enabledTgChannels: [...defaultTgChannels.value],
-    enabledPlugins: [...DEFAULT_USER_SETTINGS.enabledPlugins],
+function getDefaultSettings(): UserSettings {
+  return {
+    // 2026-08-24：频道清单彻底移出前端，搜索源（频道/插件）全在后端，
+    // 前端不再配置；仅保留并发/超时默认值供 fallback 逃生通道使用。
     concurrency: DEFAULT_USER_SETTINGS.concurrency,
     pluginTimeoutMs: DEFAULT_USER_SETTINGS.pluginTimeoutMs,
-  });
+  };
+}
 
-  // 加载设置
-  function loadSettings(): void {
-    if (typeof window === "undefined") return;
+/**
+ * 用户设置（服务端下发版）。
+ *
+ * 2026-08-21：设置面板已移除 —— 频道/插件信息是核心资产，
+ * 由服务端接口与广告一起下发；客户端不再提供可配置入口。
+ *
+ * 2026-08-24：频道清单彻底移出前端（不再经 /api/channels 下发），
+ * 搜索时分批逻辑也由后端负责（前端只发"第几批"），前端永远见不到
+ * 完整频道清单；插件亦全在后端注册启用。前端不再持有任何搜索源配置。
+ */
+export function useSettings(): UseSettingsReturn {
+  const settings = useState<UserSettings>("user-settings", () => getDefaultSettings());
 
-    try {
-      const raw = localStorage.getItem(STORAGE_KEYS.settings);
-      if (!raw) return;
-
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") return;
-
-      const validated: UserSettings = {
-        enabledTgChannels: Array.isArray(parsed.enabledTgChannels)
-          ? parsed.enabledTgChannels.filter((x: unknown) => typeof x === "string")
-          : [...defaultTgChannels.value],
-        enabledPlugins: Array.isArray(parsed.enabledPlugins)
-          ? parsed.enabledPlugins.filter((x: unknown) => typeof x === "string")
-          : [...DEFAULT_USER_SETTINGS.enabledPlugins],
-        concurrency:
-          typeof parsed.concurrency === "number" && parsed.concurrency > 0
-            ? Math.min(16, Math.max(1, parsed.concurrency))
-            : DEFAULT_USER_SETTINGS.concurrency,
-        pluginTimeoutMs:
-          typeof parsed.pluginTimeoutMs === "number" &&
-          parsed.pluginTimeoutMs > 0
-            ? parsed.pluginTimeoutMs
-            : DEFAULT_USER_SETTINGS.pluginTimeoutMs,
-      };
-
-      // 过滤无效插件
-      validated.enabledPlugins = validated.enabledPlugins.filter((name) =>
-        ALL_PLUGIN_NAMES.includes(name as any)
-      );
-
-      // 确保至少有一个插件
-      if (validated.enabledPlugins.length === 0) {
-        validated.enabledPlugins = [...DEFAULT_USER_SETTINGS.enabledPlugins];
-      }
-
-      settings.value = validated;
-    } catch (_error) {
-      // Silent failure - settings will use defaults
-    }
-  }
-
-  // 保存设置
-  function saveSettings(): void {
-    if (typeof window === "undefined") return;
-
-    try {
-      localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(settings.value));
-    } catch (_error) {
-      // Silent failure
-    }
-  }
-
-  // 重置为默认
-  function resetToDefault(): void {
-    if (typeof window === "undefined") return;
-
-    try {
-      localStorage.removeItem(STORAGE_KEYS.settings);
-    } catch (_error) {
-      // Silent failure
-    }
-
-    settings.value = {
-      enabledTgChannels: [...defaultTgChannels.value],
-      enabledPlugins: [...DEFAULT_USER_SETTINGS.enabledPlugins],
-      concurrency: DEFAULT_USER_SETTINGS.concurrency,
-      pluginTimeoutMs: DEFAULT_USER_SETTINGS.pluginTimeoutMs,
-    };
-
-    // 刷新页面以完全重置
-    if (typeof window !== "undefined") {
-      window.location.reload();
-    }
-  }
-
-  // 全选插件
-  function onSelectAll(): void {
-    settings.value.enabledPlugins = [...ALL_PLUGIN_NAMES];
-    saveSettings();
-  }
-
-  // 全不选插件
-  function onClearAll(): void {
-    settings.value.enabledPlugins = [];
-    saveSettings();
-  }
-
-  // 全选 TG 频道
-  function onSelectAllTg(): void {
-    settings.value.enabledTgChannels = [...defaultTgChannels.value];
-    saveSettings();
-  }
-
-  // 全不选 TG 频道
-  function onClearAllTg(): void {
-    settings.value.enabledTgChannels = [];
-    saveSettings();
-  }
-
-  // 页面加载时自动加载设置
-  if (typeof window !== "undefined") {
-    loadSettings();
-  }
+  // 保留函数签名以兼容现有调用方；不再做任何本地持久化
+  function loadSettings(): void {}
 
   return {
     settings,
     loadSettings,
-    saveSettings,
-    resetToDefault,
-    onSelectAll,
-    onClearAll,
-    onSelectAllTg,
-    onClearAllTg,
   };
 }

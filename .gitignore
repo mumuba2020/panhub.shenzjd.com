@@ -6,6 +6,9 @@
 .cache
 dist
 
+# Cloudflare wrangler local state
+.wrangler/
+
 # Node dependencies
 node_modules
 
@@ -22,3 +25,23 @@ logs
 .env
 .env.*
 !.env.example
+
+# Runtime data (SQLite database, hot-searches)
+data/
+
+# Tooling / IDE local data (never project source)
+.claude/
+.codebuddy/
+.playwright-mcp/
+.workbuddy/
+
+# Vitest config-transform temp files (regenerated on every test run)
+vitest.config.ts.timestamp-*.mjs
+
+# Vitest test DB sandbox dirs (created/cleaned by unit tests)
+data-test*
+
+# Guard: this project uses npm, NOT pnpm — ignore accidental pnpm artifacts
+pnpm-lock.yaml
+pnpm-workspace.yaml
+.zcode/

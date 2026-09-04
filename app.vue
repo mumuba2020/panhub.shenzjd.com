@@ -7,235 +7,75 @@
       <div class="blob blob-3"></div>
     </div>
 
-    <!-- 顶部导航 -->
-    <header class="header">
-      <nav class="nav">
-        <NuxtLink to="/" class="brand">
-          <span class="brand-icon">🔍</span>
-          <span class="brand-text">PanHub</span>
-        </NuxtLink>
-        <div class="nav-actions">
-          <button class="btn-icon" type="button" @click="openSettings = true" title="设置">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="3"></circle>
-              <path d="M12 1v6m0 6v6m4.22-10.22l4.24-4.24M6.34 6.34L2.1 2.1m17.8 17.8l-4.24-4.24M6.34 17.66L2.1 21.9"></path>
-            </svg>
-          </button>
-        </div>
-      </nav>
-    </header>
-
-    <!-- 主内容区 -->
-    <main class="main">
+    <!-- 布局切换（2026-08-25 重构）：正常客户页面 → layouts/default.vue
+         （导航/公告/浮窗）；admin 页 → layouts/admin.vue（纯净后台） -->
+    <NuxtLayout>
       <NuxtPage />
-    </main>
+    </NuxtLayout>
 
-    <!-- 设置抽屉 -->
-    <ClientOnly>
-      <SettingsDrawer
-        v-model="settings"
-        v-model:open="openSettings"
-        :all-plugins="ALL_PLUGIN_NAMES"
-        :all-tg-channels="allTgChannels"
-        @save="saveSettings"
-        @reset-default="resetToDefault" />
-    </ClientOnly>
-
-    <!-- Toast 通知 -->
-    <div v-if="toast.show" class="toast" :class="toast.type">
+    <!-- Toast 通知（全站） -->
+    <div v-if="toast.show" class="toast" :class="toast.type" role="status" aria-live="polite">
       {{ toast.message }}
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import SettingsDrawer from "./pages/index/SettingsDrawer.vue";
-import { ALL_PLUGIN_NAMES } from "./config/plugins";
-import channelsConfig from "~/config/channels.json";
-
-const { settings, loadSettings, saveSettings, resetToDefault } = useSettings();
-const openSettings = ref(false);
-
-// Toast 状态
-const toast = ref({
-  show: false,
-  message: "",
-  type: "info" as "info" | "success" | "error",
+// 全站骨架：暗色模式 CSS + 阻塞脚本（普通 useHead，⚠️ 不要用函数式工厂——
+// 曾触发 unhead "Cannot access 'h' before initialization" SSR 时序错误）
+// 主题纯跟随系统（prefers-color-scheme），首屏即时生效，无需等待 JS
+useHead({
+  link: [{ rel: "stylesheet", href: "/css/dark-mode.css" }],
+  script: [
+    {
+      innerHTML: `(function(){if(window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.classList.add('dark')})();`,
+    },
+  ],
 });
 
-// 显示 Toast
-function showToast(message: string, type: "info" | "success" | "error" = "info") {
-  toast.value = { show: true, message, type };
-  setTimeout(() => {
-    toast.value.show = false;
-  }, 3000);
-}
-
-// 所有可用的 TG 频道（用于设置面板）
-const allTgChannels = computed(() => {
-  const configChannels = (useRuntimeConfig().public as any)?.tgDefaultChannels;
-  return Array.isArray(configChannels) && configChannels.length > 0
-    ? configChannels
-    : channelsConfig.defaultChannels;
-});
-
-// 监听设置保存事件，显示提示
-watch(() => settings.value, (newVal, oldVal) => {
-  if (oldVal && newVal && JSON.stringify(newVal) !== JSON.stringify(oldVal)) {
-    showToast("设置已保存", "success");
-  }
-}, { deep: true });
+const { toast } = useToast();
+const { init: initDarkMode } = useDarkMode();
 
 onMounted(() => {
-  loadSettings();
+  initDarkMode();
 });
-
-// 暴露给子组件使用
-provide('showToast', showToast);
 </script>
 
 <style>
-/* 全局样式重置和现代化设计系统 */
-:root {
-  --primary: #6366f1;
-  --primary-dark: #4f46e5;
-  --secondary: #8b5cf6;
-  --success: #10b981;
-  --warning: #f59e0b;
-  --error: #ef4444;
+@import '~/assets/css/global.css';
 
-  --bg-primary: #ffffff;
-  --bg-secondary: #f8fafc;
-  --bg-glass: rgba(255, 255, 255, 0.7);
-
-  --text-primary: #0f172a;
-  --text-secondary: #64748b;
-  --text-tertiary: #94a3b8;
-
-  --border-light: #e2e8f0;
-  --border-medium: #cbd5e1;
-
-  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
-
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 24px;
-
-  --transition-fast: 150ms ease;
-  --transition-normal: 250ms ease;
-  --transition-slow: 350ms ease;
+/* 主内容区（default/admin 两个布局共用） */
+.main {
+  flex: 1;
+  width: 100%;
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+  animation: fadeIn 0.5s ease;
 }
 
-/* 基础重置 */
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
-  padding: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
-  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
-  color: var(--text-primary);
-
-  /* iOS Safari兼容性 */
-  -webkit-text-size-adjust: 100%;
-  -webkit-tap-highlight-color: transparent;
-  -webkit-overflow-scrolling: touch;
-}
-
-/* 滚动条美化 */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border-medium);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-tertiary);
-}
-
-/* 输入框基础样式 */
-input[type="text"],
-input[type="search"],
-input[type="email"],
-input[type="password"],
-input[type="number"],
-textarea,
-select {
-  -webkit-appearance: none;
-  -webkit-border-radius: 0;
-  border-radius: 0;
-  -webkit-text-size-adjust: 100%;
-  font-family: inherit;
-}
-
-/* 按钮基础样式 */
-button {
-  -webkit-appearance: none;
-  -webkit-tap-highlight-color: transparent;
-  font-family: inherit;
-  cursor: pointer;
-}
-
-/* iOS Safari触摸区域优化 */
-@media (max-width: 640px) {
-  button,
-  input,
-  select,
-  textarea {
-    min-height: 44px;
-    min-width: 44px;
+@media (max-width: 900px) {
+  .main {
+    padding: 16px;
   }
-}
-
-/* 动画定义 */
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-@keyframes slideInRight {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-
-@keyframes blobFloat {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  33% { transform: translate(30px, -50px) scale(1.1); }
-  66% { transform: translate(-20px, 20px) scale(0.9); }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
 }
 </style>
 
 <style scoped>
 /* 主布局 */
 .layout {
-  min-height: 100vh;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   position: relative;
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
-/* 背景装饰 - 玻璃拟态效果 */
+/* 背景装饰光斑：径向渐变模拟软光斑（2026-09-04 滚动性能优化）。
+   此前 filter: blur(48px) 的图层常驻动画，叠加页面各处 backdrop-filter
+   毛玻璃卡片 = 每帧强制重新采样模糊，是滚动掉帧主因之一；
+   改径向渐变后动画只是合成器上的 transform 变换，零重绘成本 */
 .bg-decoration {
   position: fixed;
   top: 0;
@@ -250,15 +90,14 @@ button {
 .blob {
   position: absolute;
   border-radius: 50%;
-  filter: blur(60px);
-  opacity: 0.4;
+  opacity: 0.28;
   animation: blobFloat 8s ease-in-out infinite;
 }
 
 .blob-1 {
   width: 400px;
   height: 400px;
-  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  background: radial-gradient(circle at 40% 40%, #14b8a6 0%, #0f766e 45%, transparent 72%);
   top: -100px;
   left: -100px;
   animation-delay: 0s;
@@ -267,7 +106,7 @@ button {
 .blob-2 {
   width: 300px;
   height: 300px;
-  background: linear-gradient(135deg, #ec4899, #f43f5e);
+  background: radial-gradient(circle at 40% 40%, #fb7185 0%, #f59e0b 45%, transparent 72%);
   bottom: -50px;
   right: -50px;
   animation-delay: 2s;
@@ -276,107 +115,10 @@ button {
 .blob-3 {
   width: 250px;
   height: 250px;
-  background: linear-gradient(135deg, #10b981, #06b6d4);
+  background: radial-gradient(circle at 40% 40%, #14b8a6 0%, #0ea5e9 45%, transparent 72%);
   top: 50%;
   left: 70%;
   animation-delay: 4s;
-}
-
-/* 顶部导航 - 玻璃拟态 */
-.header {
-  background: var(--bg-glass);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  box-shadow: var(--shadow-sm);
-}
-
-.nav {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 16px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-/* 品牌标识 */
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  text-decoration: none;
-  color: var(--text-primary);
-  font-weight: 700;
-  font-size: 20px;
-  transition: transform var(--transition-fast);
-}
-
-.brand:hover {
-  transform: scale(1.05);
-}
-
-.brand-icon {
-  font-size: 24px;
-  filter: drop-shadow(0 2px 4px rgba(99, 102, 241, 0.3));
-}
-
-.brand-text {
-  background: linear-gradient(135deg, var(--primary), var(--secondary));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-}
-
-/* 导航操作区 */
-.nav-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* 图标按钮 */
-.btn-icon {
-  width: 40px;
-  height: 40px;
-  border: none;
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-primary);
-  transition: all var(--transition-fast);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
-
-.btn-icon:hover {
-  background: rgba(255, 255, 255, 0.8);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-md);
-}
-
-.btn-icon:active {
-  transform: translateY(0);
-}
-
-.btn-icon svg {
-  stroke: currentColor;
-}
-
-/* 主内容区 */
-.main {
-  flex: 1;
-  width: 100%;
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 24px;
-  animation: fadeIn 0.5s ease;
 }
 
 /* Toast 通知 */
@@ -421,81 +163,11 @@ button {
 }
 
 /* 移动端优化 */
-@media (max-width: 640px) {
-  .nav {
-    padding: 12px 16px;
-  }
-
-  .main {
-    padding: 16px;
-  }
-
-  .brand {
-    font-size: 18px;
-  }
-
-  .btn-icon {
-    width: 36px;
-    height: 36px;
-  }
-
+@media (max-width: 900px) {
   .toast {
     right: 16px;
     left: 16px;
     top: 70px;
-  }
-
-  .blob {
-    filter: blur(40px);
-  }
-}
-
-/* 深色模式支持 */
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg-primary: #0f172a;
-    --bg-secondary: #1e293b;
-    --bg-glass: rgba(15, 23, 42, 0.7);
-    --text-primary: #f1f5f9;
-    --text-secondary: #cbd5e1;
-    --text-tertiary: #64748b;
-    --border-light: #334155;
-    --border-medium: #475569;
-  }
-
-  body {
-    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
-  }
-
-  .header {
-    background: rgba(15, 23, 42, 0.7);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-  }
-
-  .btn-icon {
-    background: rgba(255, 255, 255, 0.1);
-    color: var(--text-primary);
-  }
-
-  .btn-icon:hover {
-    background: rgba(255, 255, 255, 0.15);
-  }
-
-  .toast {
-    background: var(--bg-secondary);
-    border-color: var(--border-light);
-  }
-}
-
-/* 高对比度模式支持 */
-@media (prefers-contrast: high) {
-  .btn-icon {
-    border-width: 2px;
-  }
-
-  .brand-text {
-    -webkit-text-fill-color: var(--text-primary);
-    color: var(--text-primary);
   }
 }
 

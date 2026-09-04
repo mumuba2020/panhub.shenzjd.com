@@ -1,9 +1,6 @@
-import { BaseAsyncPlugin, registerGlobalPlugin } from "./manager";
+import { BaseAsyncPlugin } from "./manager";
 import type { SearchResult } from "../types/models";
 import { fetchWithRetry } from "../utils/fetch";
-import { createLogger } from "../utils/logger";
-
-const logger = createLogger("pansearch");
 
 // 轻量版：直接请求 pansearch 的 _next data 接口
 
@@ -56,7 +53,15 @@ export class PansearchPlugin extends BaseAsyncPlugin {
   }
 }
 
+// buildId 是 Next.js 构建产物 ID，变化频率以天/部署计，缓存 1 小时避免每次搜索都重抓首页
+let cachedBuildId: { value: string; expires: number } | null = null;
+const BUILD_ID_TTL = 3600_000; // 1 小时
+
 async function getBuildId(): Promise<string> {
+  if (cachedBuildId && Date.now() < cachedBuildId.expires) {
+    return cachedBuildId.value;
+  }
+
   const html = await fetchWithRetry<string>(
     WEBSITE,
     {
@@ -69,7 +74,10 @@ async function getBuildId(): Promise<string> {
     }
   );
   const m = /"buildId":"([^"]+)"/.exec(html);
-  if (m) return m[1];
+  if (m) {
+    cachedBuildId = { value: m[1], expires: Date.now() + BUILD_ID_TTL };
+    return m[1];
+  }
   const m2 =
     /<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s.exec(
       html
@@ -77,7 +85,10 @@ async function getBuildId(): Promise<string> {
   if (m2) {
     try {
       const data = JSON.parse(m2[1]);
-      if (data?.buildId) return data.buildId;
+      if (data?.buildId) {
+        cachedBuildId = { value: data.buildId, expires: Date.now() + BUILD_ID_TTL };
+        return data.buildId;
+      }
     } catch {}
   }
   throw new Error("no buildId");
@@ -92,9 +103,24 @@ function extractLink(content: string): { url: string; password: string } {
   if (mPwd) password = mPwd[1];
   return { url, password };
 }
-function extractTitle(content: string, keyword: string): string {
-  const m = /名称：([^<\n]+)/.exec(content);
-  if (m) return cleanHTML(m[1]);
+export function extractTitle(content: string, keyword: string): string {
+  // 2026-08-26 两次修复：
+  // ①上游把命中关键词包在 <span class='highlight-keyword'> 里，直接对原始
+  //   HTML 用 /名称：([^<\n]+)/ 提取会被 < 截断成孤立 "["（用户首次截图：
+  //   百度网盘结果 note 是 "["/"《"）。先 cleanHTML 剥标签再提取。
+  // ②pansearch 上游把所有字段（名称/描述/链接/📁大小/🏷标签/⚠版权/
+  //   📢频道…）挤在一行里没有 \n，原来的 [^\n]+ 会贪婪到行尾把整段
+  //   当 title，UI 直接爆炸（用户二次截图：note 5 行铺满含描述/标签/
+  //   版权等）。改用惰性 + lookahead：截到下个字段标签
+  //   （描述/链接/📁/🏷/⚠️/📢/👥/🔍）前即停。
+  const cleaned = cleanHTML(content);
+  const m = /名称[：:]\s*([\s\S]+?)(?=\s*(?:描述[：:]|链接[：:]|📁|🏷|⚠️|📢|👥|🔍|$))/u.exec(
+    cleaned
+  );
+  if (m) {
+    const t = m[1].trim();
+    if (t) return t;
+  }
   return keyword;
 }
 function cleanHTML(html: string): string {
@@ -123,4 +149,3 @@ function mapType(url: string): string {
   return "others";
 }
 
-registerGlobalPlugin(new PansearchPlugin());

@@ -7,4 +7,9 @@ compatibility_flags = ["nodejs_compat"]
 directory = ".output/public"
 binding = "ASSETS"
 
-
+# 环境变量（与线上 Docker 保持一致）
+[vars]
+LOG_LEVEL = "info"
+# IP 黑名单拦截：1=拉黑生效（50 次/5min 触发分级封禁 24h→7d→30d），0=仅记录
+BOT_DEFENSE_ENFORCE = "1"
+# Turso 连接（热搜 + 频道配置）走 wrangler secret put TURSO_URL / TURSO_AUTH_TOKEN，不写死在本文件

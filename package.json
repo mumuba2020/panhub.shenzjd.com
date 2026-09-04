@@ -18,6 +18,7 @@
   "homepage": "https://github.com/wu529778790/panhub.shenzjd.com#readme",
   "scripts": {
     "build": "nuxt build",
+    "build:cf": "NITRO_PRESET=cloudflare_module nuxt build",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
@@ -29,19 +30,22 @@
     "deploy:cf": "wrangler deploy"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
+    "@libsql/client": "^0.17.4",
+    "@tdesign-vue-next/nuxt": "^0.2.2",
     "cheerio": "^1.0.0",
     "nuxt": "^4.0.3",
     "ofetch": "^1.4.1",
     "p-limit": "^7.2.0",
+    "TagCloud": "^2.5.0",
+    "tdesign-vue-next": "^1.20.7",
     "vue": "^3.5.18",
     "vue-router": "^4.5.1"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^2.1.0",
-    "vitest": "^2.1.9"
+    "@vitest/coverage-v8": "^4.1.10",
+    "vitest": "^4.1.10"
   },
-  "license": "MIT",
+  "license": "UNLICENSED",
   "keywords": [
     "panhub",
     "网盘搜索",

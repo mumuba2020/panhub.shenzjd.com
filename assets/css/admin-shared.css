@@ -1,0 +1,86 @@
+/* ============================================================
+ * 管理后台共享样式（2026-08-25 引入；2026-09-01 TDesign 化瘦身）
+ *
+ * 2026-09-01 起，按钮/输入框/表格/分页/徽章/弹窗/消息全部由
+ * TDesign 组件承担（品牌色经下方 --td-* token 覆盖对齐 #2563eb），
+ * 本文件只剩：
+ *   1. admin 作用域的局部 token 覆盖（蓝调，不污染客户页）
+ *   2. 少量跨面板复用的排版类（卡片头 / 表单布局 / 状态提示）
+ * ============================================================ */
+:where(.admin-shell, .admin-gate, .admin-auth-shell, .admin-page, .admin-view) {
+  --admin-radius: 12px;
+  --admin-radius-sm: 8px;
+
+  /* ---- 蓝调覆盖（仅 admin 作用域） ---- */
+  --primary: #2563eb;
+  --primary-dark: #1d4ed8;
+  --primary-glow: rgba(37, 99, 235, 0.2);
+  --primary-soft: #eff4ff; /* 激活菜单浅蓝 */
+  --primary-soft-border: #bfdbfe; /* 浅蓝边框 */
+  --bg-primary: #ffffff;
+  --bg-secondary: #f4f6f9; /* 画布底 */
+  --bg-hover: rgba(37, 99, 235, 0.06);
+  --bg-active: rgba(37, 99, 235, 0.1);
+  --border-light: #e8ecf0; /* 边框 */
+  --border-medium: #d4dbe5;
+  --text-secondary: #475569;
+  --text-tertiary: #94a3b8;
+  --error: #dc2626;
+  --danger-strong: #dc2626;
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --shadow-sm: 0 1px 2px 0 rgba(16, 24, 40, 0.05);
+}
+
+/* ---- TDesign 品牌色对齐（admin 蓝 #2563eb，替换默认 #0052d9） ----
+   --td-* 变量只被 TDesign 组件消费，而 t- 组件仅存在于 admin 路由，
+   全局覆盖不影响客户端页面。深色模式由 [theme-mode="dark"] 分支自动适配。 */
+:root {
+  --td-brand-color: #2563eb;
+  --td-brand-color-hover: #1d4ed8;
+  --td-brand-color-active: #1d4ed8;
+  --td-brand-color-focus: rgba(37, 99, 235, 0.12);
+  --td-brand-color-light: rgba(37, 99, 235, 0.08);
+  --td-brand-color-light-hover: rgba(37, 99, 235, 0.14);
+  --td-brand-color-disabled: rgba(37, 99, 235, 0.4);
+}
+
+/* ---------- 表单布局（控件本体走 TDesign） ---------- */
+.admin-form { display: flex; flex-direction: column; gap: 12px; margin-bottom: 4px; }
+.admin-form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+/* ---------- 列表头 / 状态 / 提示 ---------- */
+.admin-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 0 8px;
+  font-size: 13px;
+  color: var(--text-tertiary, #9ca3af);
+}
+.admin-state {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--text-tertiary, #9ca3af);
+  font-size: 14px;
+  background: var(--bg-secondary, #f3f4f6);
+  border-radius: var(--admin-radius, 12px);
+}
+.admin-notice {
+  padding: 10px 14px;
+  border-radius: 8px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.admin-notice-error {
+  background: var(--danger-bg, #fef2f2);
+  color: var(--danger-strong, #dc2626);
+  border: 1px solid var(--danger-border, #fecaca);
+}
+.admin-notice .admin-link {
+  margin-left: 6px;
+  color: var(--primary, #2563eb);
+  font-weight: 600;
+  text-decoration: none;
+}
+.admin-hint { color: var(--text-tertiary, #b0b7c3); }

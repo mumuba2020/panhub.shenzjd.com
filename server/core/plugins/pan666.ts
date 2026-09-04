@@ -1,4 +1,5 @@
-import { BaseAsyncPlugin, registerGlobalPlugin } from "./manager";
+// NOTE: 2026-08-07 盘点：源站被 Cloudflare 拦截（搜索 0 结果），未注册。绕过 CF 后可重新启用。
+import { BaseAsyncPlugin } from "./manager";
 import type { SearchResult } from "../types/models";
 import { ofetch } from "ofetch";
 
@@ -92,5 +93,3 @@ export class Pan666Plugin extends BaseAsyncPlugin {
     return out;
   }
 }
-
-registerGlobalPlugin(new Pan666Plugin());

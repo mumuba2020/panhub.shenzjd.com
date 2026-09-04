@@ -1,8 +1,4 @@
-import type { SearchResult } from "#internal/nitro/virtual/polyfill"; // placeholder to keep type import path valid in Nitro
-import type { SearchRequest } from "../types/models";
-
-// 由于上面的导入可能会被优化器处理，这里再显式导入我们的真实类型
-import type { SearchResult as RealSearchResult } from "../types/models";
+import type { SearchRequest, SearchResult } from "../types/models";
 
 export interface AsyncSearchPlugin {
   name(): string;
@@ -10,7 +6,7 @@ export interface AsyncSearchPlugin {
   search(
     keyword: string,
     ext?: Record<string, any>
-  ): Promise<RealSearchResult[]>;
+  ): Promise<SearchResult[]>;
   setMainCacheKey(key: string): void;
   setCurrentKeyword(keyword: string): void;
   skipServiceFilter(): boolean;
@@ -46,7 +42,7 @@ export class BaseAsyncPlugin implements AsyncSearchPlugin {
   async search(
     _keyword: string,
     _ext?: Record<string, any>
-  ): Promise<RealSearchResult[]> {
+  ): Promise<SearchResult[]> {
     return [];
   }
 }

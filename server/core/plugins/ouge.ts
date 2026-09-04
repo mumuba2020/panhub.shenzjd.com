@@ -1,4 +1,4 @@
-import { BaseAsyncPlugin, registerGlobalPlugin } from "./manager";
+import { BaseAsyncPlugin } from "./manager";
 import type { SearchResult } from "../types/models";
 import { ofetch } from "ofetch";
 
@@ -165,5 +165,3 @@ export class OugePlugin extends BaseAsyncPlugin {
     return [];
   }
 }
-
-registerGlobalPlugin(new OugePlugin());

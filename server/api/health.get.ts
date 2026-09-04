@@ -13,6 +13,5 @@ export default defineEventHandler(async (event) => {
     plugins_enabled: true,
     plugin_count: plugins.length,
     plugins,
-    channels: config.defaultChannels,
   };
 });

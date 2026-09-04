@@ -1,12 +1,12 @@
 // Simple API smoke tests for Nitro endpoints
 // Usage:
-//   API_BASE=http://localhost:3000/api pnpm run test:api
+//   API_BASE=http://localhost:4000/api pnpm run test:api
 // or
 //   pnpm run dev  (in another shell) then: pnpm run test:api
 
 import { ofetch } from "ofetch";
 
-const API_BASE = process.env.API_BASE || "http://localhost:3000/api";
+const API_BASE = process.env.API_BASE || "http://localhost:4000/api";
 const KW = process.env.KW || "1"; // 统一关键词：1
 const KW_LIST = (() => {
   const raw = process.env.KW_LIST;
@@ -166,6 +166,46 @@ async function testSearchPostTG() {
     log(`search POST tg: ok, total=${total}`);
   }
 }
+
+// === 新增：错误场景测试 ===
+
+log("--- Error Case Tests ---");
+
+// Test: missing kw parameter returns 400
+{
+  let passed = false;
+  try {
+    await ofetch(`${API_BASE}/search`, { method: "GET" });
+    err("Expected 400 for missing kw, got success");
+  } catch (e) {
+    if (e.status === 400 || e.statusCode === 400) {
+      log("PASS: missing kw returns 400");
+      passed = true;
+    } else {
+      err(`Expected 400 for missing kw, got ${e.status || e.statusCode}`);
+    }
+  }
+  if (!passed) process.exit(1);
+}
+
+// Test: hot-searches GET with invalid limit returns 400
+{
+  let passed = false;
+  try {
+    await ofetch(`${API_BASE}/hot-searches?limit=abc`);
+    err("Expected 400 for invalid limit, got success");
+  } catch (e) {
+    if (e.status === 400 || e.statusCode === 400) {
+      log("PASS: invalid limit returns 400");
+      passed = true;
+    } else {
+      err(`Expected 400 for invalid limit, got ${e.status || e.statusCode}`);
+    }
+  }
+  if (!passed) process.exit(1);
+}
+
+log("--- All Error Case Tests Passed ---");
 
 async function main() {
   log("API_BASE =", API_BASE);

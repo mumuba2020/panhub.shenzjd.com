@@ -4,180 +4,109 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-PanHub is a Nuxt-based web application that provides unified search across multiple cloud storage platforms (Aliyun, Quark, Baidu, 115, Xunlei, etc.) and Telegram channels. It features intelligent caching, concurrent search optimization, and a plugin-based architecture.
+PanHub is a Nuxt 4 web application that aggregates search results from Telegram channels and external plugin sites to find cloud storage resources (Aliyun, Quark, Baidu, 115, Xunlei, etc.). It supports priority-based batch processing, unified LRU caching with namespaces, SQLite hot search persistence (with memory fallback), and deploys to Cloudflare Workers (default), Vercel, or Docker.
 
-## Common Commands
+## Package Manager
+
+`npm` (lockfile: `package-lock.json`). Always use `npm install`.
+
+## Development Commands
 
 ```bash
-# Development
-pnpm dev                    # Start dev server
-pnpm build                  # Build for production
-pnpm preview                # Preview production build
-pnpm generate               # Generate static site
-
-# Testing
-pnpm test                   # Run all unit tests
-pnpm test:watch             # Run tests in watch mode
-pnpm test:coverage          # Run tests with coverage
-pnpm test:api               # Run API integration tests
-
-# Deployment
-pnpm deploy:cf              # Deploy to Cloudflare Workers
+npm dev                  # Start dev server
+npm build                # Production build
+npm preview              # Preview production build
+npm test                 # Run all unit tests (Vitest)
+npm test:watch           # Tests in watch mode
+npm test:coverage        # Coverage reports (V8)
+npm test:api             # API integration tests
+vitest run test/unit/memoryCache.test.ts   # Run a single test file
+vitest run -t "test name pattern"          # Run tests matching a name
+npm deploy:cf            # Deploy to Cloudflare Workers
 ```
 
 ## Architecture
 
-### Core Search Flow
+### Search Flow (Two-Tier)
 
-```
-User Input → useSearch (composable) → /api/search endpoint → SearchService → [TG Channels + Plugins] → Merged Results
-```
+1. **Client** (`composables/useSearch.ts`): Manages search state, batching, pause/continue, fast/deep phases. Calls `/api/search` and `/api/search.post`.
+2. **Server** (`server/core/services/searchService.ts`): Orchestrates concurrent searches across TG channels and plugins with priority batching, caching, timeout control, and plugin health checking.
 
-### Key Components
+**Fast Search**: First batch of priority TG channels + plugins returns immediately.  
+**Deep Search**: Remaining channels/plugins continue loading in batches.
 
-**1. Search Service** (`server/core/services/searchService.ts`)
-- Main orchestrator for search operations
-- Supports two sources: Telegram channels and plugins
-- Priority batch processing: high-priority channels first, then normal channels
-- Built-in caching (TG cache + Plugin cache)
-- Concurrent execution with `p-limit`
+### Server Core (`server/core/`)
 
-**2. Plugin System** (`server/core/plugins/`)
-- Base class: `BaseAsyncPlugin` in `manager.ts`
-- Plugins register globally via `registerGlobalPlugin()`
-- Active plugins (10): pansearch, qupansou, panta, hunhepan, jikepan, labi, thepiratebay, duoduo, xuexizhinan, nyaa
-- Each plugin implements `search(keyword, ext)` → `SearchResult[]`
+- **`services/searchService.ts`**: Main orchestrator. Uses `p-limit` for concurrency, `UnifiedCache` for caching, `PluginHealthChecker` to skip unhealthy plugins.
+- **`services/tg.ts`**: Telegram channel post fetching with Cheerio HTML parsing.
+- **`services/hotSearchService.ts`** + **`hotSearchStore.ts`** / **`sqliteHotSearchStore.ts`** / **`memoryHotSearchStore.ts`**: Hot search persistence with adapter pattern — SQLite (Docker/local) or memory (serverless).
+- **`services/doubanHotService.ts`**: Douban hot list fetching.
+- **`cache/unifiedCache.ts`**: Namespaced cache wrapper around `MemoryCache`. Namespaces: `TG_SEARCH`, `PLUGIN_SEARCH`, `HOT_SEARCH`. Cache keys: `tg:${keyword}:${channels}`, `plugin:${keyword}:${plugins}`.
+- **`cache/memoryCache.ts`**: LRU cache with TTL expiration and memory monitoring.
+- **`plugins/manager.ts`**: Plugin registry (`BaseAsyncPlugin` base class, global registry pattern via `registerGlobalPlugin()`). Each plugin implements `AsyncSearchPlugin` interface with `name()`, `priority()`, `search()` methods.
+- **`plugins/*.ts`**: ~20 search plugins (pansearch, qupansou, panta, etc.).
+- **`plugins/pluginHealth.ts`**: Circuit breaker pattern — tracks plugin failure rates, auto-skips unhealthy plugins for 5 minutes.
+- **`utils/fetch.ts`**: Network wrapper with retry/timeout (via `fetchWithRetry`). **`utils/searchKeyword.ts`**: Builds keyword variants for deep search (CJK-aware splitting, noise filtering). **`utils/errors.ts`**: Error classification and `ErrorCollector`. **`utils/logger.ts`**: Logging.
+- **`types/models.ts`**: Core interfaces — `SearchResult`, `MergedLink`, `MergedLinks`, `SearchResponse`, `SearchRequest`.
 
-**3. Memory Cache** (`server/core/cache/memoryCache.ts`)
-- LRU eviction policy with memory monitoring
-- Configurable: maxSize (1000), maxMemoryBytes (100MB), cleanupInterval (5min)
-- Automatic cleanup at 80% memory threshold
-- Tracks hits/misses/evictions
+### Client-Side
 
-**4. Network Utilities** (`server/core/utils/fetch.ts`)
-- `fetchWithRetry`: Automatic retry with exponential backoff (3 attempts, 1s/2s/4s)
-- `safeExecute`: Error handling with fallback values
-- Timeout control (default 8s)
+- **`app.vue`**: Single-page app with header, search box, results, hot searches, Douban section, settings drawer.
+- **`composables/useSearch.ts`**: Search state machine (loading → deepLoading → done), with pause/resume.
+- **`composables/useSettings.ts`**: User settings (enabled plugins, TG channels, concurrency, timeout).
+- **`utils/extractMergedFromResponse.ts`** + **`utils/mergeMergedByType.ts`**: Client-side result merging helpers.
+- **Components**: `SearchBox`, `ResultGroup`, `ResultHeader`, `HotSearchSection`, `DoubanHotSection`, `SettingsDrawer`.
 
-**5. Hot Search System** (`server/core/services/hotSearchSQLite.ts`)
-- SQLite-based persistent storage (with memory fallback)
-- Records search terms with scoring
-- Automatic cleanup (max 50 entries)
-- REST API: `POST /api/hot-searches` (record), `GET /api/hot-searches` (retrieve)
+### Configuration (`config/`)
 
-**6. Telegram Channel Fetcher** (`server/core/services/tg.ts`)
-- Scrapes t.me/s/{channel} for posts
-- Uses Jina.ai proxy as fallback for CORS/caching
-- Extracts links and passwords from messages
-- Classifies by hostname (aliyun, baidu, quark, etc.)
+- **`channels.json`**: 运行参数模板（concurrency, timeouts, cache TTL）。**真实频道清单已于 2026-08-24 迁出仓库**：AES-256-GCM 加密存入 Turso `channel_config` 表，由 `server/core/services/channelConfigService.ts` 拉取解密缓存。修改频道：配好 `CHANNEL_KEY` 后运行 `scripts/sync-channels.mjs`。
+- **`plugins.ts`**: Platform info (`PLATFORM_INFO` with colors/icons) used by the frontend to render source icons; `DEFAULT_USER_SETTINGS` (concurrency/timeout defaults). Plugin names are now owned by the backend `PluginManager` (frontend no longer holds a plugin list).
+- **`doubanHot.ts`**: Douban API configuration.
+- **`data/`**: SQLite database for hot search persistence (Docker/local only, not in git).
 
-### Frontend
+### Authentication
 
-**Composables**
-- `useSearch.ts`: Manages search state, performs batched requests (fast + deep search), handles cancellation
-- `useSettings.ts`: Manages user preferences (channels, plugins, concurrency) via localStorage
+Search routes are protected by WeChat Official Account (公众号) login verification (`requireWxAuth`), plus bot UA / IP blacklist defense. See `docs/bot-defense-and-tuning.md`.
 
-**UI Pattern**
-- Fast results: First batch (concurrency count) returned immediately
-- Deep results: Remaining batches loaded progressively
-- Results merged by type (aliyun, baidu, quark, etc.)
+## API Routes (`server/api/`)
 
-### Configuration
+All routes use the `name.method.ts` convention (e.g., `search.get.ts`, `hot-searches.post.ts`).
 
-**Runtime Config** (`nuxt.config.ts`)
-```typescript
-{
-  priorityChannels: string[];    // High-priority TG channels
-  defaultChannels: string[];     // All TG channels
-  defaultConcurrency: number;    // Default: 4
-  pluginTimeoutMs: number;       // Default: 5000ms
-  cacheEnabled: boolean;         // Default: true
-  cacheTtlMinutes: number;       // Default: 30min
-}
-```
+Key routes: `search.get.ts`/`search.post.ts`, `hot-searches.get.ts`/`hot-searches.post.ts`, `douban-hot.get.ts`, `img.get.ts` (image proxy), `health.get.ts`, `plugin-health.get.ts`.
 
-**Channels Config** (`config/channels.json`)
-- `priorityChannels`: 8 channels processed with 2x concurrency
-- `defaultChannels`: 80+ channels total
-- `defaultPlugins`: 10 active plugins
-
-**Plugin Config** (`config/plugins.ts`)
-- `ALL_PLUGIN_NAMES`: List of all available plugins
-- `PLATFORM_INFO`: Platform metadata (name, color, icon)
-- `DEFAULT_USER_SETTINGS`: Default concurrency (4), timeout (5000ms)
-
-## Data Models
-
-```typescript
-interface SearchResult {
-  message_id: string;
-  unique_id: string;
-  channel: string;
-  datetime: string;      // ISO 8601
-  title: string;
-  content: string;
-  links: Link[];
-}
-
-interface Link {
-  type: string;          // aliyun, baidu, quark, etc.
-  url: string;
-  password: string;
-}
-
-interface MergedLinks {
-  [platform: string]: MergedLink[];  // e.g., { aliyun: [...], baidu: [...] }
-}
-```
-
-## API Endpoints
-
-- `GET /api/search` - Main search endpoint
-  - Params: `kw`, `channels`, `conc`, `refresh`, `res`, `src`, `plugins`, `cloud_types`, `ext`
-- `GET /api/health` - Health check
-- `POST /api/hot-searches` - Record search term
-- `GET /api/hot-searches` - Get hot searches (with `limit` param)
-
-## Testing
-
-**Test Structure** (`test/unit/`)
-- `fetch.test.ts`: Network retry, timeout, safe execution
-- `memoryCache.test.ts`: LRU, memory monitoring, cleanup
-- `pluginManager.test.ts`: Plugin registration, execution
-- `tgSearchOptimization.test.ts`: Priority batch processing
-- `hot-search.test.ts`: SQLite operations, memory fallback
-
-**Running Specific Tests**
-```bash
-pnpm test test/unit/memoryCache.test.ts
-pnpm test test/unit/tgSearchOptimization.test.ts
-```
-
-## Key Optimizations
-
-1. **Priority Batch Processing**: Priority channels use 2x concurrency (up to 12), reducing initial latency by ~95%
-2. **Smart Caching**: LRU + memory monitoring prevents leaks, auto-cleanup
-3. **Error Isolation**: `safeExecute` ensures single plugin failure doesn't affect others
-4. **Concurrent Control**: `p-limit` prevents resource exhaustion
-5. **Progressive Results**: Fast results (first batch) shown immediately, deep results load in background
+Route rules in `nuxt.config.ts` disable caching for all API routes (SWR 3600 only on `/**` catch-all).
 
 ## Deployment
 
-**Cloudflare Workers**: Uses `cloudflare-module` preset
-**Vercel**: Uses `vercel` preset (detected via `VERCEL` env var)
-**Docker**: Multi-stage build, exposes port 3000
+- **Cloudflare Workers** (default): `wrangler.toml` with `nodejs_compat` flag. `npm deploy:cf` or `wrangler deploy`.
+- **Vercel**: Auto-detected via `VERCEL` env var. Sets `nitro.preset: "vercel"`.
+- **Docker**: `Dockerfile` uses `node:20-alpine`, builds with `NITRO_PRESET=node-server`. Data dir `/app/data` for SQLite hot search persistence. CI builds push to GHCR and Docker Hub.
+- **Nitro preset**: Auto-detected via `NITRO_PRESET` env var or platform detection. Defaults to `cloudflare-module`.
 
-## Important Notes
+## CI/CD (`.github/workflows/`)
 
-- better-sqlite3 requires native compilation - falls back to memory mode if unavailable
-- TG scraping uses Jina.ai proxy to bypass CORS and improve reliability
-- All network requests include user-agent spoofing
-- Cache keys are deterministic: `tg:${keyword}:${sortedChannels}` or `plugin:${keyword}:${sortedPlugins}`
-- Search cancellation uses AbortController + sequence tracking to prevent race conditions
+- **`docker-image.yml`**: Builds and pushes Docker image on push to main/dev. Publishes to GHCR and Docker Hub (if secrets configured).
+- **`sync-upstream.yml`**: Daily cron (03:00 UTC) merges from upstream `main` into fork's default branch.
+
+## Testing
+
+- Framework: Vitest with Node environment, globals enabled.
+- Config: `vitest.config.ts` — includes `test/unit/**/*.test.ts`, alias `#internal` → `.nuxt`.
+- Coverage: V8 provider, excludes `node_modules/`, `test/`, `*.d.ts`, config/index files.
+- Run `npm test` before committing changes to `server/core/`.
+
+## Conventions
+
+- Vue composables: `use` prefix (`useSearch`, `useSettings`).
+- Server routes: `name.get.ts` / `name.post.ts` under `server/api/`.
+- Unit tests: `test/unit/*.test.ts`.
+- Integration tests: `test/*.mjs`.
+- Code style: 2-space indent, semicolons, double quotes.
+- Commit messages: Conventional Commits (`feat:`, `fix:`, `refactor:`, `delete:`). Keep subjects short and imperative, one logical change per commit.
 
 ## Environment Variables
 
-- `LOG_LEVEL`: debug | info | warn | error (default: info)
-- `HOT_SEARCH_PASSWORD`: Password for clearing/deleting hot searches (default: admin123)
-- `NITRO_PRESET`: Deployment preset (auto-detected)
-- `VERCEL`: Set by Vercel for preset detection
+- `LOG_LEVEL`: Logging level (default: `info`).
+- `NITRO_PRESET`: Deployment preset (auto-detect if unset).
+- `PORT`: Server port (default: `4000`).
+- `VERCEL`: Auto-detected for Vercel deployment.
